@@ -1,0 +1,27 @@
+multisim-spice
+==============
+
+The MIT License in this repository covers everything EXCEPT the contents of
+`vendor/`, which are third-party software bundled for convenience and
+distributed under their own terms.
+
+----
+
+ngspice (bundled at vendor/Spice64/)
+------------------------------------
+
+This package includes an unmodified binary distribution of **ngspice 46**
+for Windows x64, originally obtained from:
+
+    https://sourceforge.net/projects/ngspice/files/ng-spice-rework/46/ngspice-46_64.7z
+
+ngspice is open-source software released under a BSD-style license. The
+complete copyright and license text is preserved in the bundle at:
+
+    vendor/Spice64/docs/COPYING
+
+For source code, documentation and project information, see:
+
+    https://ngspice.sourceforge.io/
+
+ngspice is not modified; the binary tree is included as-is.

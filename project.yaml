@@ -1,0 +1,10 @@
+name: multisim-spice
+authors: [左岚]
+category: Agent
+tags: [Multisim, SPICE, ngspice, 电路仿真, ClaudeCode, Skill]
+status: done
+updated: 2026-05-21
+summary: 一句话把电路描述变成 ngspice 自检通过、可直接在 NI Multisim 打开的 SPICE 网表(Claude Code Skill)
+
+cover: 03-deliver.png
+readme: README.md
