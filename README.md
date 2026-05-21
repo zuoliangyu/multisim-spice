@@ -1,59 +1,59 @@
 # multisim-spice
 
-> A Claude Code skill that turns natural-language circuit descriptions into ngspice-verified SPICE netlists, ready to import into NI Multisim.
+> 一个 Claude Code skill:把一句话的电路描述,自动变成 ngspice 自检通过、可直接在 NI Multisim 打开的 SPICE 网表。
 
 **作者:** 左岚 · **元数据:** 见 [`project.yaml`](project.yaml)
 
-**Flow:** you describe a circuit in plain language → Claude generates a SPICE netlist → the bundled ngspice runs a batch self-check → on pass, the netlist is opened in Multisim and you press F5 to simulate.
+**流程:** 你用大白话描述电路 → Claude 生成 SPICE 网表 → 内置 ngspice 跑一遍批处理自检 → 通过后用 Multisim 打开,你按 F5 仿真。
 
-## Why
+## 为什么需要它
 
-The usual "AI draws a circuit" workflow has a closed loop only with a human in it: the AI emits something, you simulate, you tell it what's wrong. This skill closes the loop with **ngspice as the source of truth** — Claude doesn't hand you a netlist it hasn't run itself.
+常见的"AI 画电路"套路里,只有人才能闭环:AI 给出网表,你拿去 Multisim 仿真,你再告诉它哪儿不对。这个 skill 用 **ngspice 当事实标准** 把这个环闭上 —— Claude 不会把自己没跑过的网表交给你。
 
-## Features
+## 特性
 
-- **No external AI API.** Claude itself (running the skill) generates the netlist — no Gemini / OpenAI / Anthropic-API key needed beyond Claude Code.
-- **No Python.** Pure `SKILL.md` + a vendored Windows binary. Nothing to `pip install`.
-- **Bundled ngspice 46 (Windows x64)** for offline self-checking. Zero install.
-- **Self-verifying.** Claude scans ngspice output for errors and compares numeric results against your design spec, iterating until both pass.
-- **Multisim path auto-detect.** Probes common install paths and the Windows registry; asks only on miss.
+- **不依赖外部 AI API。** 由 Claude 本身(运行这个 skill)生成网表,除了 Claude Code 之外不需要 Gemini / OpenAI / Anthropic API key。
+- **不依赖 Python。** 只有 `SKILL.md` 加一份内置的 Windows 二进制,无 `pip install`。
+- **内置 ngspice 46(Windows x64)** 用于离线自检,绿色版零安装。
+- **自验证。** Claude 会扫 ngspice 输出里的报错,并把数值结果对照设计指标核对,不达标就改网表重跑。
+- **Multisim 路径自动探测。** 扫常见安装路径和 Windows 注册表,都没命中才问你。
 
-## Requirements
+## 环境要求
 
-- **Windows** — the bundled ngspice is a Windows x64 binary; Multisim is Windows-targeted; the skill drives the OS via PowerShell.
-- **NI Multisim 14.x** installed (other versions likely work — extend the candidates list in `SKILL.md`).
-- **Claude Code** — this is a Claude Code skill, invoked via its Skill mechanism.
+- **Windows** —— 内置的 ngspice 是 Windows x64 二进制;Multisim 本身就是 Windows-only;skill 用 PowerShell 调 OS。
+- **NI Multisim 14.x**(其它版本应该也能用 —— 把路径补进 `SKILL.md` 的候选列表即可)。
+- **Claude Code** —— 这是一个 Claude Code skill,通过其 Skill 机制调用。
 
-## Install
+## 安装
 
-Clone or copy this folder into one of Claude Code's skill directories.
+把本目录 clone 或拷到 Claude Code 的 skill 目录之一。
 
-**Personal (available across all your projects):**
+**个人级(对你所有项目可用):**
 ```powershell
 git clone https://github.com/zuoliangyu/multisim-spice "$env:USERPROFILE\.claude\skills\multisim-spice"
 ```
 
-**Project-scoped (available only inside one project):**
+**项目级(仅在单个项目里可用):**
 ```powershell
 git clone https://github.com/zuoliangyu/multisim-spice <project-root>\.claude\skills\multisim-spice
 ```
 
-That's it — no `pip install`, no API keys, no PATH edits.
+就这些 —— 无 `pip install`、无 API key、无需改 PATH。
 
-## Usage
+## 用法
 
-In Claude Code, just describe what you want:
+在 Claude Code 里直接描述你想要什么:
 
-> "Design an RC low-pass filter with 1 kHz cutoff, 5 V supply, and open it in Multisim."
+> "帮我设计一个 RC 低通滤波器,截止频率 1 kHz,电源 5 V,然后用 Multisim 打开。"
 
-Claude auto-routes to this skill (description match), then:
+Claude 会根据描述自动路由到本 skill,然后:
 
-1. Asks for any missing critical params.
-2. Writes `<circuit_name>.cir` in your working directory.
-3. Runs the bundled `ngspice -b` on it; if results don't meet the spec, fixes the netlist and re-runs.
-4. Opens the verified `.cir` in Multisim. **You press F5** to run the simulation there.
+1. 缺啥关键参数就问你。
+2. 在你当前工作目录写一份 `<电路名>.cir`。
+3. 用内置 ngspice 跑 `-b` 批处理;结果不达标就改网表重跑。
+4. 把验证过的 `.cir` 在 Multisim 中打开。**你按 F5** 让它在 Multisim 里跑仿真。
 
-You can also invoke explicitly: `/multisim-spice`.
+也可以显式调用:`/multisim-spice`。
 
 ## 实战截图
 
@@ -71,42 +71,42 @@ You can also invoke explicitly: `/multisim-spice`.
 
 ![交付清单与 Multisim 启动](03-deliver.png)
 
-## How it works
+## 内部原理
 
-| Step | What happens | Where |
+| 步骤 | 干什么 | 在哪里 |
 |---|---|---|
-| 1. Clarify | Resolve ambiguous specs (Vcc, frequencies, gain, …) | conversation |
-| 2. Generate | Claude writes a clean SPICE netlist per standard conventions | `<circuit>.cir` |
-| 3. Self-check | `ngspice_con.exe -b <circuit>.cir` — scan for errors + check numbers vs spec; iterate on miss | bundled ngspice |
-| 4. Hand off | `Start-Process multisim.exe <circuit>.cir`; user presses F5 | NI Multisim |
+| 1. 厘清 | 解决模糊参数(Vcc、频率、增益……) | 对话里 |
+| 2. 生成 | Claude 按 SPICE 规范写干净网表 | `<circuit>.cir` |
+| 3. 自检 | `ngspice_con.exe -b <circuit>.cir` —— 扫报错 + 把数值对照指标,不达标就改 | 内置 ngspice |
+| 4. 移交 | `Start-Process multisim.exe <circuit>.cir`;用户按 F5 | NI Multisim |
 
-Full workflow, SPICE conventions and troubleshooting live in [`SKILL.md`](SKILL.md).
+完整工作流、SPICE 规范、排错速查表见 [`SKILL.md`](SKILL.md)。
 
-## Customizing the Multisim search path
+## 改 Multisim 搜索路径
 
-Open `SKILL.md`, jump to the **`## 定位 Multisim`** section, and add your install path to the `$candidates` array. The skill also probes the Windows registry under `HKLM:\SOFTWARE\WOW6432Node\National Instruments\Circuit Design Suite`, and falls back to asking the user.
+打开 `SKILL.md`,跳到 **`## 定位 Multisim`** 那段,把你自己的安装路径加到 `$candidates` 数组里。skill 也会扫 Windows 注册表的 `HKLM:\SOFTWARE\WOW6432Node\National Instruments\Circuit Design Suite`,都没命中才问用户。
 
-## What if I don't want the bundled ngspice?
+## 不想要内置的 ngspice 怎么办
 
-Delete `vendor/Spice64/` and edit `SKILL.md` to point at an external `ngspice.exe` — for example:
+删掉 `vendor/Spice64/`,改 `SKILL.md` 让它指向外部的 `ngspice.exe`,例如:
 
-- `conda install -c conda-forge ngspice` (drops a Windows build into `<env>/Library/bin/`)
-- Download a different version from [ngspice on SourceForge](https://sourceforge.net/projects/ngspice/files/ng-spice-rework/)
+- `conda install -c conda-forge ngspice`(在 `<env>/Library/bin/` 下放一份 Windows 构建)
+- 从 [ngspice 在 SourceForge 的页面](https://sourceforge.net/projects/ngspice/files/ng-spice-rework/) 下载别的版本
 
-## Limitations
+## 局限
 
-- **Windows-only.** Bundled binary + PowerShell driver + Multisim's primary platform.
-- The deliverable `.cir` should stay standard SPICE — Multisim's importer dislikes ngspice-only constructs (e.g., `.control` blocks). The skill keeps these out of the final file.
-- Multisim's netlist import auto-lays-out the schematic; expect to manually tidy non-trivial circuits.
-- **No auto-F5.** The skill opens the circuit in Multisim but does NOT press F5 for you — intentional, to avoid timing/focus fragility.
+- **仅 Windows。** 内置二进制 + PowerShell 驱动 + Multisim 主要支持的也是 Windows。
+- 交付给 Multisim 的 `.cir` 要保持标准 SPICE 语法 —— Multisim 的导入器不认 ngspice 专有语法(比如 `.control` 块)。skill 已经把这些挡在最终文件之外。
+- Multisim 导入网表后会自动排版,稍复杂的电路要手动整理。
+- **不会自动按 F5。** skill 只把电路在 Multisim 里打开,不会替你按 F5 —— 故意的,避免因焦点/时序问题而出错。
 
-## License
+## 协议
 
-This skill's own code and documentation are released under the **MIT License** — see [`LICENSE`](LICENSE).
+本 skill 自己的代码与文档以 **MIT License** 发布 —— 见 [`LICENSE`](LICENSE)。
 
-The bundled ngspice in `vendor/Spice64/` is **independent third-party software** under its own (BSD-style) license. See [`NOTICE`](NOTICE) and `vendor/Spice64/docs/COPYING`.
+`vendor/Spice64/` 里内置的 ngspice 是**独立的第三方软件**,使用其自身的(BSD 风格)许可。见 [`NOTICE`](NOTICE) 和 `vendor/Spice64/docs/COPYING`。
 
-## Acknowledgments
+## 致谢
 
-- [ngspice](https://ngspice.sourceforge.io/) — the open-source SPICE engine that makes the self-check loop possible.
-- NI Multisim — the target schematic / simulation environment.
+- [ngspice](https://ngspice.sourceforge.io/) —— 让自检闭环成为可能的开源 SPICE 引擎。
+- NI Multisim —— 本 skill 面向的原理图 / 仿真目标环境。
