@@ -95,8 +95,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\patch-ms14.ps1" "re
 
 | 网表 | 覆盖的功能 | 输出里应有 |
 |---|---|---|
+| `01_divider` | DC 工作点,无半导体器件 | `ACTIVE   dcOpPoint` |
 | `03_rc_step` | 瞬态分析,无半导体器件 | `ANALYSIS Transient 0 s to 0.006 s`、`ACTIVE   transient` |
+| `04_halfwave_rectifier` | 二极管模型写回 + 瞬态分析 | `PATCHED  D1 <- D1N4148 ...`、`ACTIVE   transient` |
 | `05_bjt_ce_amp` | BJT 模型写回 + AC 分析 | `PATCHED  Q1 <- Q2N2222 ...`、`ACTIVE   ac` |
+| `06_opamp_inverting` | `E` 受控源展开的运放,无半导体器件,瞬态分析 | `ANALYSIS Transient 0 s to 0.003 s`、`ACTIVE   transient` |
 | `07_multi_device` | 按引脚对应(网表 Q1/Q2/Q3/D1/D2/D3 → 内部 Q4/Q2/Q1/D4/D2/D1)、拆分共用模型、PNP 翻转 | 6 行 `MAPPED`、3 行 `CLONED`、`SYMBOL Q1: N-type virtual part turned into virtual PNP BJT`、`ACTIVE   dcOpPoint` |
 | `08_mos_jfet` | PMOS / P 沟道 JFET 翻转、MOS 的 W/L 实例参数 | 4 行 `MAPPED`、2 行 `SYMBOL`、2 行 `INSTANCE ...: W=2e-05  L=2e-06` |
 | `09_dc_sweep` | 直流扫描 | `ANALYSIS DC sweep V1 0 to 12 step 0.5`、`ACTIVE   dcSweep` |

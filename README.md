@@ -18,7 +18,7 @@
 - **自验证。** Claude 会扫 ngspice 输出里的报错,并把数值结果对照设计指标核对,不达标就改网表重跑。
 - **参考网表库。** `references/` 里有 9 个自检通过的电路(分压、RC 低通、RC 阶跃、整流、BJT 共射、运放反相、多种半导体模型、MOS / JFET、直流扫描),Claude 写同类电路时先参照它们,索引见 [`references/README.md`](references/README.md)。
 - **生成可直接运行的 Multisim 工程。** Multisim 导入网表时会丢掉分析设置、所有 `.model` 和实例参数,还会把 PNP / PMOS / P 沟道 JFET 导成 N 型;`scripts/patch-ms14.ps1` 把这些写回导入后的 `.ms14` 工程,打开后直接 F5 就出结果,原理图和仿真结果都与 ngspice 一致。
-- **示例工程。** [`examples/`](examples/README.md) 里是 6 个用完整流程生成的成品 `.ms14`(AC、瞬态、DC 工作点、直流扫描,含 BJT、MOS、JFET、二极管),打开就能按 F5 看效果。
+- **示例工程。** [`examples/`](examples/README.md) 里是 9 个用完整流程生成的成品 `.ms14`,对应全部参考网表(AC、瞬态、DC 工作点、直流扫描,含 BJT、MOS、JFET、二极管、受控源运放),打开就能按 F5 看效果。
 - **Multisim 路径自动探测。** 读 Windows 注册表里的安装路径,再扫各盘 `Program Files`,都没命中才问你。
 
 ## 环境要求
