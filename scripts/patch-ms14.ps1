@@ -1,15 +1,19 @@
-# Copy the .model parameters of a SPICE netlist into a Multisim 14 design (.ms14) that was created
-# by importing that netlist. Multisim's netlist import replaces every D/Q/M/J device with a virtual
-# part that has default parameters; this restores the netlist's models so schematic and simulation match.
+# Finish a Multisim 14 design (.ms14) that was created by importing a SPICE netlist:
+#  1. Multisim's netlist import replaces every D/Q/M/J device with a virtual part that has default
+#     parameters (and turns PNP into NPN); write the netlist's .model text back into each device.
+#  2. The import also ignores .op/.ac/.tran; set those analyses up, select output voltages, and make
+#     the netlist's analysis the active one, so the design simulates like the netlist right away.
 #
-# Usage: powershell -NoProfile -ExecutionPolicy Bypass -File patch-ms14.ps1 <netlist.cir> <imported.ms14> [<out.ms14>]
+# Usage: powershell -NoProfile -ExecutionPolicy Bypass -File patch-ms14.ps1 <netlist.cir> <imported.ms14> [<out.ms14>] [-Outputs "out,in"]
 #   <out.ms14> defaults to <imported>_models.ms14. The output is written as plain XML, which Multisim 14 opens directly.
+#   -Outputs: nets whose voltages are plotted; default is out and in when present, otherwise every net.
 # Every patched device is read back and checked. Exit 0 on success; on any mismatch nothing is written and exit is 1.
 
 param(
   [Parameter(Mandatory = $true)][string]$Netlist,
   [Parameter(Mandatory = $true)][string]$Design,
-  [string]$Out = ""
+  [string]$Out = "",
+  [string]$Outputs = ""
 )
 
 Add-Type -TypeDefinition @'
@@ -202,6 +206,115 @@ public static class Ms14 {
     return xml;
   }
 
+  // ---- analysis setup: Multisim's import ignores .op/.ac/.tran, so write them into the design's SimState ----
+  public static double SpiceNumber(string tok) {
+    var m = Regex.Match(tok.Trim(), @"^([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)(meg|mil|[tgkmunpf])?", RegexOptions.IgnoreCase);
+    if (!m.Success) throw new Exception("not a SPICE number: " + tok);
+    double v = double.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+    switch (m.Groups[2].Value.ToLowerInvariant()) {
+      case "t": v *= 1e12; break; case "g": v *= 1e9; break; case "meg": v *= 1e6; break; case "k": v *= 1e3; break;
+      case "m": v *= 1e-3; break; case "mil": v *= 25.4e-6; break; case "u": v *= 1e-6; break;
+      case "n": v *= 1e-9; break; case "p": v *= 1e-12; break; case "f": v *= 1e-15; break;
+    }
+    return v;
+  }
+  static string Num(double v) { return v.ToString("G12", System.Globalization.CultureInfo.InvariantCulture); }
+
+  // Analysis cards of the netlist: kind ("op", "ac", "tran") -> tokens after the card name.
+  public static List<string[]> ParseAnalyses(string text) {
+    var list = new List<string[]>();
+    foreach (string raw in text.Replace("\r", "").Split('\n')) {
+      var m = Regex.Match(raw.Trim(), @"^\.(op|ac|tran|dc)\b\s*(.*)$", RegexOptions.IgnoreCase);
+      if (!m.Success) continue;
+      var tok = new List<string> { m.Groups[1].Value.ToLowerInvariant() };
+      foreach (string t in Regex.Split(m.Groups[2].Value.Trim(), @"\s+")) if (t.Length > 0) tok.Add(t);
+      list.Add(tok.ToArray());
+    }
+    return list;
+  }
+
+  public static List<string> NetNames(string xml) {
+    var nets = new List<string>();
+    foreach (Match m in Regex.Matches(xml, "<CiNode Class=\"CiNode\" LocalName=\"&amp;ASC([^\"]*)\"")) {
+      string n = m.Groups[1].Value.ToLowerInvariant();
+      if (n != "0" && !nets.Contains(n)) nets.Add(n);
+    }
+    return nets;
+  }
+
+  static int CloseBrace(string s, int open) {         // index of the '}' matching s[open] == '{'
+    int depth = 0;
+    for (int i = open; i < s.Length; i++) { if (s[i] == '{') depth++; else if (s[i] == '}' && --depth == 0) return i; }
+    throw new Exception("unbalanced SimState");
+  }
+  static string SetValue(string sec, string key, string type, string value, int nth) {
+    var ms = Regex.Matches(sec, "([\\n{])" + key + ":\\w+\\{[^{}]*\\}");   // first key of a list follows '{'
+    if (ms.Count <= nth) throw new Exception("SimState has no " + key);
+    var m = ms[nth];
+    return sec.Substring(0, m.Index) + m.Groups[1].Value + key + ":" + type + "{" + value + "}" + sec.Substring(m.Index + m.Length);
+  }
+  // Replace the selected-output list (the "Nodes" list, not "UserNodes") of one analysis section.
+  static string SetOutputs(string sec, IEnumerable<string> nets) {
+    var m = Regex.Match(sec, "\\nNodes:list\\{");
+    if (!m.Success) throw new Exception("SimState section has no Nodes list");
+    int open = m.Index + m.Length - 1, close = CloseBrace(sec, open);
+    string body = sec.Substring(open + 1, close - open - 1);
+    // keep the list's own flags, drop any previous NODE entries
+    var keep = new StringBuilder(); int i = 0;
+    while (i < body.Length) {
+      int nl = body.IndexOf('\n', i); if (nl < 0) nl = body.Length - 1;
+      if (body.Substring(i).StartsWith("NODE:list{")) { int c = CloseBrace(body, i + 9); i = c + 1; if (i < body.Length && body[i] == '\r') i++; if (i < body.Length && body[i] == '\n') i++; continue; }
+      keep.Append(body.Substring(i, nl - i + 1)); i = nl + 1;
+    }
+    var nodes = new StringBuilder();
+    foreach (string n in nets)
+      nodes.Append("NODE:list{GROUP:long{768}\nPLOTDEVICETYPE:long{0}\nTYPE:long{3}\nNAME:string{$" + n + "}\nDESCRIPTION:string{}\nINI_VALUE:double{0}\n}\n");
+    return sec.Substring(0, open + 1) + nodes.ToString() + keep.ToString() + sec.Substring(close);
+  }
+
+  public static string ConfigureAnalyses(string xml, List<string[]> cards, List<string> outputs, List<string> report) {
+    var ssm = Regex.Match(xml, "SimState=\"([^\"]*)\"");
+    if (!ssm.Success) { report.Add("ERROR    design has no SimState"); return xml; }
+    string ss = ssm.Groups[1].Value, active = null;
+    string[,] bounds = { { "op", "OP", "AC", "dcOpPoint", "DC Operating Point" }, { "ac", "AC", "PHASOR", "ac", "AC Sweep" }, { "tran", "TRAN", "FOUR", "transient", "Transient" } };
+    foreach (var card in cards) {
+      int b = -1;
+      for (int k = 0; k < bounds.GetLength(0); k++) if (bounds[k, 0] == card[0]) b = k;
+      if (b < 0) { report.Add("WARNING  ." + card[0] + " is not set up automatically; set it in Simulate > Analyses and simulation"); continue; }
+      var st = Regex.Match(ss, "\\n" + bounds[b, 1] + ":list\\{"); var en = Regex.Match(ss, "\\n" + bounds[b, 2] + ":list\\{");
+      if (!st.Success || !en.Success || en.Index < st.Index) { report.Add("ERROR    SimState has no " + bounds[b, 1] + " section"); continue; }
+      string sec = ss.Substring(st.Index, en.Index - st.Index), desc;
+      if (card[0] == "ac") {
+        if (card.Length < 5) { report.Add("ERROR    .ac needs: dec|oct|lin <points> <fstart> <fstop>"); continue; }
+        string fs = Num(SpiceNumber(card[3])), fe = Num(SpiceNumber(card[4]));
+        sec = SetValue(sec, "VARIATION", "string", card[1].ToLowerInvariant(), 0);
+        sec = SetValue(sec, "NPOINTS_PER_VARIATION", "double", Num(SpiceNumber(card[2])), 0);
+        sec = SetValue(sec, "FSTART", "double", fs, 0); sec = SetValue(sec, "FSTOP", "double", fe, 0);
+        sec = SetValue(sec, "hrange", "double", fs, 0); sec = SetValue(sec, "hrange", "double", fe, 1);
+        desc = "AC " + card[1] + " " + card[2] + " points, " + fs + " Hz to " + fe + " Hz";
+      } else if (card[0] == "tran") {
+        var nums = new List<string>(); foreach (string t in card) if (Regex.IsMatch(t, @"^[-+.\d]")) nums.Add(t);
+        if (nums.Count < 2) { report.Add("ERROR    .tran needs: <tstep> <tstop> [<tstart> [<tmax>]]"); continue; }
+        string tstop = Num(SpiceNumber(nums[1])), tstart = nums.Count > 2 ? Num(SpiceNumber(nums[2])) : "0";
+        string tmax = Num(SpiceNumber(nums.Count > 3 ? nums[3] : nums[0]));   // like ngspice, cap the step at tstep
+        sec = SetValue(sec, "TSTOP", "double", tstop, 0); sec = SetValue(sec, "TSTART", "double", tstart, 0);
+        sec = SetValue(sec, "TMAX", "double", tmax, 0);
+        desc = "Transient " + tstart + " s to " + tstop + " s, max step " + tmax + " s";
+      } else desc = "DC operating point";
+      sec = SetValue(sec, "ANALYSIS_ID", "long", "1", 0); sec = SetValue(sec, "PLOT_TITLE", "string", bounds[b, 4], 0);
+      sec = SetOutputs(sec, outputs);
+      ss = ss.Substring(0, st.Index) + sec + ss.Substring(en.Index);
+      if (active == null || card[0] != "op") active = bounds[b, 3];
+      report.Add("ANALYSIS " + desc + "; outputs " + string.Join(", ", outputs.ConvertAll(n => "V(" + n + ")").ToArray()));
+    }
+    if (active == null) return xml;
+    xml = xml.Substring(0, ssm.Groups[1].Index) + ss + xml.Substring(ssm.Groups[1].Index + ssm.Groups[1].Length);
+    xml = Regex.Replace(xml, "ActiveAnalysis=\"&amp;ASC[^\"]*\"", "ActiveAnalysis=\"&amp;ASC" + active + "\"");
+    xml = xml.Replace("SimStateDataInOldVersion=\"1\"", "SimStateDataInOldVersion=\"0\"");
+    report.Add("ACTIVE   " + active);
+    return xml;
+  }
+
   static string Attr(string s) { return s.Replace("&", "&amp;").Replace("<", "&lt;").Replace("\"", "&quot;"); }
 
   // Read back every patched component's model text; returns refdes -> "TYPE(params)" as stored in the design.
@@ -279,20 +392,37 @@ if (-not $Out) { $Out = Join-Path (Split-Path $inPath) ([IO.Path]::GetFileNameWi
 $elementModel = New-Object 'System.Collections.Generic.Dictionary[string,string]'
 $models = New-Object 'System.Collections.Generic.Dictionary[string,string]'
 $elementNodes = New-Object 'System.Collections.Generic.Dictionary[string,string[]]'
-[Ms14]::ParseNetlist([IO.File]::ReadAllText($netPath), $elementModel, $models, $elementNodes)
-if ($elementModel.Count -eq 0) { "No D/Q/M/J devices with a .model in the netlist; nothing to patch."; exit 0 }
+$netText = [IO.File]::ReadAllText($netPath)
+[Ms14]::ParseNetlist($netText, $elementModel, $models, $elementNodes)
 
 $xml = [Ms14]::ReadDesign([IO.File]::ReadAllBytes($inPath))
 $report = New-Object 'System.Collections.Generic.List[string]'
-$map = [Ms14]::MapByConnectivity($xml, $elementNodes, $report)
-$byRef = New-Object 'System.Collections.Generic.Dictionary[string,string]'
-foreach ($k in $map.Keys) { $byRef[$map[$k].ToUpperInvariant()] = $elementModel[$k] }
-$patched = [Ms14]::Patch($xml, $byRef, $models, $report)
+$patched = $xml
+$map = New-Object 'System.Collections.Generic.Dictionary[string,string]'
+if ($elementModel.Count -gt 0) {
+  $map = [Ms14]::MapByConnectivity($xml, $elementNodes, $report)
+  $byRef = New-Object 'System.Collections.Generic.Dictionary[string,string]'
+  foreach ($k in $map.Keys) { $byRef[$map[$k].ToUpperInvariant()] = $elementModel[$k] }
+  $patched = [Ms14]::Patch($xml, $byRef, $models, $report)
 
-# PNP devices were imported as NPN symbols; flip them so the schematic matches the netlist
-foreach ($k in $map.Keys) {
-  if ($k[0] -eq 'Q' -and $models[$elementModel[$k]] -match '^PNP\b') { $patched = [Ms14]::FlipBjtToPnp($patched, $map[$k], $report) }
+  # PNP devices were imported as NPN symbols; flip them so the schematic matches the netlist
+  foreach ($k in $map.Keys) {
+    if ($k[0] -eq 'Q' -and $models[$elementModel[$k]] -match '^PNP\b') { $patched = [Ms14]::FlipBjtToPnp($patched, $map[$k], $report) }
+  }
+} else { $report.Add("MODELS   no D/Q/M/J devices with a .model; nothing to write back") }
+
+# analyses: same settings as the netlist, with output voltages selected
+$nets = [Ms14]::NetNames($patched)
+$outList = New-Object 'System.Collections.Generic.List[string]'
+if ($Outputs) {
+  foreach ($n in ($Outputs -split '[,\s]+' | Where-Object { $_ })) {
+    if ($nets -contains $n.ToLowerInvariant()) { $outList.Add($n.ToLowerInvariant()) } else { $report.Add("ERROR    -Outputs: no net named " + $n) }
+  }
+} else {
+  foreach ($n in 'out', 'in') { if ($nets -contains $n) { $outList.Add($n) } }
+  if ($outList.Count -eq 0) { foreach ($n in $nets) { $outList.Add($n) } }
 }
+$patched = [Ms14]::ConfigureAnalyses($patched, [Ms14]::ParseAnalyses($netText), $outList, $report)
 
 # verify: every mapped component must now carry exactly its netlist model
 $back = [Ms14]::ReadBack($patched)

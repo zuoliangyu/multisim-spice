@@ -55,7 +55,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check.ps1 references
 
 ## 导入后写回模型
 
-Multisim 工程文件 `.ms14` 是分块压缩的 XML(PKWARE DCL 压缩,每块最多 900000 字节),每个器件的模型以 SPICE `.MODEL` 文本嵌在 `<CiModel>` 里,原理图符号的图形也逐个实例嵌在文件中。`scripts/patch-ms14.ps1` 解压后按引脚所接的网络把网表器件对应到 Multisim 元件,改写模型文本、把 PNP 的符号改回 PNP,再以纯 XML 写出(Multisim 14 能直接打开不压缩的 `.ms14`)。
+Multisim 工程文件 `.ms14` 是分块压缩的 XML(PKWARE DCL 压缩,每块最多 900000 字节),每个器件的模型以 SPICE `.MODEL` 文本嵌在 `<CiModel>` 里,原理图符号的图形也逐个实例嵌在文件中。`scripts/patch-ms14.ps1` 解压后按引脚所接的网络把网表器件对应到 Multisim 元件,改写模型文本、把 PNP 的符号改回 PNP、写入分析设置,再以纯 XML 写出(Multisim 14 能直接打开不压缩的 `.ms14`)。
 
 用 `07_multi_device.cir` 实测(导入 → 另存 → 写回 → 打开 → 导出网表 → ngspice):
 
@@ -73,13 +73,23 @@ Multisim 工程文件 `.ms14` 是分块压缩的 XML(PKWARE DCL 压缩,每块最
 - PNP 被导入成 NPN 符号(族名 `BJT_NPN`、发射极箭头朝外),脚本改族名 / 类型字符串,并把箭头的三个顶点换成 Multisim 自己的 PNP 符号坐标,打开后箭头朝里;
 - 带单位后缀的数值(`14.34f`、`80m`、`100u`)Multisim 正常识别。
 
+**分析设置**也存在 `.ms14` 里:`CIITDiagram` 的 `SimState` 属性是一段 `名字:类型{值}` 嵌套文本,`ANALYSES` 下 `OP` / `AC` / `TRAN` 各有参数(`AC` 的 `FSTART` / `FSTOP` 是纯数值,`TRAN` 的 `TSTOP` / `TMAX` 等)和输出列表(`Nodes` 里 `NAME:string{$out}` 且 `GROUP:long{768}` 表示选中);当前分析由 `ActiveAnalysis` 属性决定(`interactive` / `dcOpPoint` / `ac` / `transient`)。脚本按网表的 `.op` / `.ac` / `.tran` 改写这些字段。
+
+在 Multisim 里打开脚本生成的工程、不做任何设置直接 F5 的实测:
+
+| 电路 | Multisim 结果 | ngspice |
+|---|---|---|
+| `07_multi_device`(DC 工作点) | VC1 8.11629 V、VC2 223.79 mV、VC3 5.25505 V,V(d1/d2/d3) 653.21 / 624.05 / 547.74 mV | 8.116298 V、223.80 mV、5.255039 V,653.23 / 624.07 / 547.76 mV |
+| `05_bjt_ce_amp`(AC 扫描) | 波特图:中频增益约 158,相位约 −180° | 44.0 dB(≈158),−175°(1 kHz) |
+| `03_rc_step`(瞬态) | V(out) 按 τ = 1 ms 指数上升到 5 V | τ = 1.0002 ms |
+
 **回归测试**(改脚本后在仓库根目录跑,不需要打开 Multisim):
 
 ```
 powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\patch-ms14.ps1" "references\07_multi_device.cir" "references\fixtures\07_multi_device_import.ms14" "<临时目录>\07_out.ms14"
 ```
 
-应输出 6 行 `MAPPED`(网表 Q1/Q2/Q3/D1/D2/D3 → 内部 Q4/Q2/Q1/D4/D2/D1)、3 行 `CLONED`、1 行 `SYMBOL Q1: virtual NPN turned into virtual PNP`,末行 `PATCH: OK`。`fixtures/07_multi_device_import.ms14` 是 `07_multi_device.cir` 在 Multisim 14.0 里导入后直接另存、未做任何修改的工程。
+应输出 6 行 `MAPPED`(网表 Q1/Q2/Q3/D1/D2/D3 → 内部 Q4/Q2/Q1/D4/D2/D1)、3 行 `CLONED`、1 行 `SYMBOL Q1: virtual NPN turned into virtual PNP`、1 行 `ANALYSIS DC operating point; outputs V(a), ...`、`ACTIVE   dcOpPoint`,末行 `PATCH: OK`。`fixtures/07_multi_device_import.ms14` 是 `07_multi_device.cir` 在 Multisim 14.0 里导入后直接另存、未做任何修改的工程。
 
 ### 完整交付示例(含半导体器件)
 
@@ -89,7 +99,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\patch-ms14.ps1" "re
 2. 打开:`find-multisim.ps1 -Open <路径>\07_multi_device.cir`(Multisim 设为以管理员运行时会弹 UAC)。
 3. 请用户 File → Save As 存成 `07_multi_device_import.ms14`,等用户确认。
 4. 写回:`patch-ms14.ps1 07_multi_device.cir 07_multi_device_import.ms14 07_multi_device.ms14`,确认末行 `PATCH: OK`,有 `NOTE` / `WARNING` 时如实告诉用户。
-5. 请用户关掉 `07_multi_device_import` 标签页(不保存),打开 `07_multi_device.ms14`;告诉用户在 Simulate → Analyses 里选 DC Operating Point,并给出 ngspice 的 VC1 / VC2 / VC3 供对照。
+5. 请用户关掉 `07_multi_device_import` 标签页(不保存),打开 `07_multi_device.ms14`,直接按 F5:DC 工作点表应与 ngspice 一致(实测 VC1 8.11629 V、VC2 223.79 mV、VC3 5.25505 V),把 ngspice 的数值一起告诉用户供对照。
 
 ## 模型来源
 
