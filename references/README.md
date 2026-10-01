@@ -12,6 +12,7 @@
 | `04_halfwave_rectifier.cir` | `.tran` | `SIN` 源、二极管 `.model` | 峰值 ≈ 9.3 V,纹波 < 1.9 V | 峰值 9.27 V,纹波 1.51 V |
 | `05_bjt_ce_amp.cir` | `.ac` | BJT `.model`、分压偏置、耦合/旁路电容 | IC ≈ 1.4 mA,VC ≈ 5.5 V,增益 40~45 dB | IC 1.37 mA,VC 5.55 V,44.0 dB,相位 −175° |
 | `06_opamp_inverting.cir` | `.tran` | 理想运放用 `E` 受控源 + 电阻展开(不用 `.subckt`) | 增益 −10 | −9.999 |
+| `07_multi_device.cir` | `.op` | 多种半导体模型(两种 NPN、PNP、两种二极管,D1/D3 共用模型),演示导入后写回模型 | 见下文《导入后写回模型》 | VC1 8.116 V,VC2 0.224 V,VC3 5.255 V |
 
 ## 自检命令
 
@@ -29,6 +30,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check.ps1 references
 | `04_halfwave_rectifier.cir` | `meas tran vmax max v(out) from=80m to=100m; meas tran vmin min v(out) from=80m to=100m; let ripple = vmax - vmin; print ripple` |
 | `05_bjt_ce_amp.cir` | `meas ac gain_1k find vdb(out) at=1k; meas ac phase_1k find vp(out) at=1k; op; print v(b) v(e) v(c) @q1[ic]` |
 | `06_opamp_inverting.cir` | `meas tran vin_pk find v(in) at=2.25m; meas tran vout_pk find v(out) at=2.25m; let gain = vout_pk / vin_pk; print gain` |
+| `07_multi_device.cir` | `op; print v(c1) v(c2) v(c3) v(d1) v(d2) v(d3)` |
 
 ## Multisim 14 导入实测
 
@@ -40,12 +42,56 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check.ps1 references
 | `02_rc_lowpass.cir` | 全部正确(`AC 1` 激励保留) | 无半导体器件 | fc = 998.6 Hz | 与原版一致 |
 | `03_rc_step.cir` | 全部正确(`PULSE` 参数保留) | 无半导体器件 | τ = 1.0002 ms | 与原版一致 |
 | `04_halfwave_rectifier.cir` | 全部正确 | D1N4148 → 默认参数虚拟二极管 | 峰值 9.28 V,纹波 1.52 V | 与原版几乎一致 |
-| `05_bjt_ce_amp.cir` | 全部正确 | Q2N2222 → 默认参数虚拟 NPN | VC 6.30 V,VE 1.23 V,增益 43.5 dB | 工作点偏移约 0.75 V,需在 Multisim 里换成 2N2222A |
+| `05_bjt_ce_amp.cir` | 全部正确 | Q2N2222 → 默认参数虚拟 NPN | VC 6.30 V,VE 1.23 V,增益 43.5 dB | 工作点偏移约 0.75 V,需用 `patch-ms14.ps1` 写回模型 |
 | `06_opamp_inverting.cir` | 全部正确 | 无半导体器件,`E` 源正常导入 | 增益 −9.999 | 与原版一致 |
+
+另做了一组对照(三极管偏置 + 二极管限流,真实参数下 VC = 8.12 V、默认参数下 9.76 V):`.model` 名写成元件库型号 `2N2222A` / `1N4148`、带完整参数;同样的型号名但不写 `.model`;以及现在的 `Q2N2222` / `D1N4148` 写法。三种写法导入后导出的网表完全相同,都是 `NPN__TRANSISTORS_VIRTUAL__1` / `DIODE__DIODES_VIRTUAL__1` 默认模型。结论:导入器不按型号查元件库,半导体器件的参数只能导入后再写回(见下文《导入后写回模型》)。
+
+又按写法做了排查:全部参数改用科学计数法、只留关键参数并分别用后缀 / 科学计数法写,以及把 Multisim 自己导出的带参数网表原样导回去。4 种情况导入后都是默认参数的虚拟器件。说明导入器(网表 → 原理图)和导出器是两套逻辑,导入时根本不读 `.model`,与写法无关。往返导入还会把元件名叠一层类型前缀(`D1` → `DD1`)、把直流源改成幅度为 0 的正弦源,所以 Multisim 导出的网表也不适合作为交付格式。
+
+导入后手动处理(同一个对照电路实测):Q1 用 Edit model 改 IS、BF、VAF、IKF、ISE、NE 六个参数后,导出网表的 VC = 8.1162 V(原网表 8.1163 V);D1 用 Replace 换成 Master Database 的 1N4148 后,V(d) = 0.641 V(原网表 0.653 V,NI 自带模型参数不同)。
 
 6 个电路的连线都已用导出网表逐个引脚核对。原理图上交叉的线不一定代表连错(04、05 的图看着乱,实际连线全对),判断以导出的网表为准。
 
+## 导入后写回模型
+
+Multisim 工程文件 `.ms14` 是分块压缩的 XML(PKWARE DCL 压缩,每块最多 900000 字节),每个器件的模型以 SPICE `.MODEL` 文本嵌在 `<CiModel>` 里,原理图符号的图形也逐个实例嵌在文件中。`scripts/patch-ms14.ps1` 解压后按引脚所接的网络把网表器件对应到 Multisim 元件,改写模型文本、把 PNP 的符号改回 PNP,再以纯 XML 写出(Multisim 14 能直接打开不压缩的 `.ms14`)。
+
+用 `07_multi_device.cir` 实测(导入 → 另存 → 写回 → 打开 → 导出网表 → ngspice):
+
+| 器件 | 模型 | 原网表 | 写回后导出 | 未写回(默认参数) |
+|---|---|---|---|---|
+| Q1 VC | Q2N2222 | 8.116298 V | 8.116298 V | 9.755 V |
+| Q2 VC | QHIBETA(BF=500) | 0.2238 V | 0.2238 V | 6.725 V |
+| Q3 VC | Q2N3906(PNP) | 5.255039 V | 5.255039 V | 2.245 V |
+| D1 / D2 / D3 | D1N4148 / D1N4007 / D1N4148 | 0.6532 / 0.6241 / 0.5478 V | 一致 | 0.693 / 0.693 / 0.634 V |
+
+导入时发现、脚本已处理的几点:
+
+- 同类虚拟器件共用一个模型(三个三极管都指向 `NPN__TRANSISTORS_VIRTUAL__1`),需要不同参数时脚本会复制拆开;
+- 工程内部的元件编号会被打乱(网表 Q3 在内部是 Q1),所以按引脚网络而不是按名字对应;界面上显示的位号仍与网表一致;
+- PNP 被导入成 NPN 符号(族名 `BJT_NPN`、发射极箭头朝外),脚本改族名 / 类型字符串,并把箭头的三个顶点换成 Multisim 自己的 PNP 符号坐标,打开后箭头朝里;
+- 带单位后缀的数值(`14.34f`、`80m`、`100u`)Multisim 正常识别。
+
+**回归测试**(改脚本后在仓库根目录跑,不需要打开 Multisim):
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\patch-ms14.ps1" "references\07_multi_device.cir" "references\fixtures\07_multi_device_import.ms14" "<临时目录>\07_out.ms14"
+```
+
+应输出 6 行 `MAPPED`(网表 Q1/Q2/Q3/D1/D2/D3 → 内部 Q4/Q2/Q1/D4/D2/D1)、3 行 `CLONED`、1 行 `SYMBOL Q1: virtual NPN turned into virtual PNP`,末行 `PATCH: OK`。`fixtures/07_multi_device_import.ms14` 是 `07_multi_device.cir` 在 Multisim 14.0 里导入后直接另存、未做任何修改的工程。
+
+### 完整交付示例(含半导体器件)
+
+以 `07_multi_device.cir` 为例,Claude 依次执行:
+
+1. 自检:`check.ps1 07_multi_device.cir "op; print v(c1) v(c2) v(c3)"`,末行 `CHECK: PASS`,数值和设计目标对上。
+2. 打开:`find-multisim.ps1 -Open <路径>\07_multi_device.cir`(Multisim 设为以管理员运行时会弹 UAC)。
+3. 请用户 File → Save As 存成 `07_multi_device_import.ms14`,等用户确认。
+4. 写回:`patch-ms14.ps1 07_multi_device.cir 07_multi_device_import.ms14 07_multi_device.ms14`,确认末行 `PATCH: OK`,有 `NOTE` / `WARNING` 时如实告诉用户。
+5. 请用户关掉 `07_multi_device_import` 标签页(不保存),打开 `07_multi_device.ms14`;告诉用户在 Simulate → Analyses 里选 DC Operating Point,并给出 ngspice 的 VC1 / VC2 / VC3 供对照。
+
 ## 模型来源
 
-- `D1N4148`、`Q2N2222`:常见的厂商 SPICE 模型参数,足够做教学级仿真;要和实测严格对比时换成器件手册给的模型。
+- `D1N4148`、`Q2N2222`、`Q2N3906`、`D1N4007`:常见的厂商 SPICE 模型参数(`QHIBETA` 是 07 里为区分模型虚构的高 β NPN),足够做教学级仿真;要和实测严格对比时换成器件手册给的模型。
 - 06 的理想运放:输入电阻 1 MΩ(`RIN`)、开环增益 1e5(`EOP`)、输出电阻 75 Ω(`ROUT`),不含带宽和摆率限制。没有用 `.subckt`,因为 Multisim 14 导入网表时会丢掉子电路实例。需要带宽等效应时,导入后在 Multisim 里换成元件库里的运放。
