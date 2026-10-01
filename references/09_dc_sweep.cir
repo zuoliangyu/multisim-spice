@@ -1,0 +1,7 @@
+Voltage divider - DC sweep of the input
+* V1 swept 0 to 12 V; V(out) = V1 * 4.7 / 14.7, a straight line ending at 3.837 V
+V1 in 0 DC 12
+R1 in out 10k
+R2 out 0 4.7k
+.dc V1 0 12 0.5
+.end

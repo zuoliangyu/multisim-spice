@@ -104,7 +104,7 @@ public static class Ms14 {
 
   // ---- netlist: element name -> model name, model name -> "TYPE(params)" ----
   public static void ParseNetlist(string text, Dictionary<string, string> elementModel, Dictionary<string, string> models,
-                                  Dictionary<string, string[]> elementNodes) {
+                                  Dictionary<string, string[]> elementNodes, Dictionary<string, string> elementInst) {
     var lines = new List<string>();
     string[] raw = text.Replace("\r", "").Split('\n');
     for (int i = 1; i < raw.Length; i++) {          // line 1 is the title
@@ -128,6 +128,15 @@ public static class Ms14 {
           var nodes = new string[k - 1];
           for (int n = 1; n < k; n++) nodes[n - 1] = tok[n].ToLowerInvariant();
           elementNodes[name] = nodes;
+          // instance parameters after the model (W=20u L=2u, AREA, M=2 ...), written the way Multisim stores them
+          var inst = new List<string>();
+          for (int n = k + 1; n < tok.Length; n++) {
+            var kv = Regex.Match(tok[n], @"^(\w+)=(.+)$");
+            double v;
+            if (kv.Success && TrySpiceNumber(kv.Groups[2].Value, out v)) inst.Add(kv.Groups[1].Value.ToUpperInvariant() + "=" + Num(v).ToLowerInvariant());
+            else inst.Add(tok[n]);
+          }
+          if (inst.Count > 0) elementInst[name] = " " + string.Join("  ", inst.ToArray());
           break;
         }
     }
@@ -135,7 +144,7 @@ public static class Ms14 {
 
   static readonly Dictionary<char, string[]> PINS = new Dictionary<char, string[]> {
     { 'D', new[] { "A", "K" } }, { 'Q', new[] { "C", "B", "E", "S" } },
-    { 'M', new[] { "D", "G", "S", "B" } }, { 'J', new[] { "D", "G", "S" } } };
+    { 'M', new[] { "D", "G", "S", "SUB" } }, { 'J', new[] { "D", "G", "S" } } };
 
   // Netlist device name -> Multisim refdes, matched on the nets each pin connects to.
   public static Dictionary<string, string> MapByConnectivity(string xml, Dictionary<string, string[]> elementNodes, List<string> report) {
@@ -169,40 +178,64 @@ public static class Ms14 {
           if (ok) { found = c.Key; break; }
         }
       }
-      if (found == null) { report.Add("UNMATCHED " + kv.Key + " (" + string.Join(",", kv.Value) + "): no component with the same pin nets"); continue; }
+      if (found == null) { report.Add("UNMATCHED " + kv.Key + " (" + string.Join(",", kv.Value) + "): no component with the same pin nets. If Multisim placed an unconnected database part instead, the .model name matched a database model (e.g. MP placed MPS2222): rename the model to something distinctive such as PMOS_LOAD and import again"); continue; }
       taken.Add(found); map[kv.Key] = found;
       report.Add("MAPPED   netlist " + kv.Key + " (" + string.Join(",", kv.Value) + ") -> Multisim " + found);
     }
     return map;
   }
 
-  // Netlist import always places an NPN virtual BJT (the device type lives only in the ignored .model).
-  // Turn one into a PNP virtual BJT: family/type strings in the component, and the emitter arrow of its symbol.
-  public static string FlipBjtToPnp(string xml, string refdes, List<string> report) {
+  // Netlist import always places the N-type virtual part (the device type lives only in the ignored .model):
+  // NPN for Q, MOS_N_4T for M, JFET_N for J. Turn one into its P-type twin: family/type strings in the
+  // component, and the arrow of its symbol (the only geometry difference, taken from Multisim's own P parts).
+  class PFlip { public string Name; public string[,] Swaps; public int[] NArrow, PArrow; }
+  static readonly Dictionary<char, PFlip> PFLIPS = new Dictionary<char, PFlip> {
+    { 'Q', new PFlip { Name = "PNP BJT",
+      Swaps = new[,] { { "&amp;ASCBJT_NPN", "&amp;ASCBJT_PNP" }, { "&amp;ASCNPN", "&amp;ASCPNP" }, { "&amp;ASC.MODEL NPN NPN", "&amp;ASC.model PNP PNP" },
+                       { "&amp;ASCFully configurable n-type BJT", "&amp;ASCFully configurable p-type BJT" } },
+      NArrow = new[] { 60, 71, 61, 75, 57, 76 }, PArrow = new[] { 58, 77, 57, 73, 61, 72 } } },
+    { 'M', new PFlip { Name = "PMOS",
+      Swaps = new[,] { { "&amp;ASCMOS_N_4T", "&amp;ASCMOS_P_4T" }, { "&amp;ASCNMOS", "&amp;ASCPMOS" }, { "&amp;ASC.model NMOS   nmos", "&amp;ASC.model PMOS pmos" },
+                       { "&amp;ASC@", "&amp;ASCB" }, { "&amp;ASCFully configurable n-channel MOSFET with a substrate terminal", "&amp;ASCFully configurable p-channel MOSFET with a substrate terminal" },
+                       { "Double=\"366.\"", "Double=\"368.\"" } },
+      NArrow = new[] { 58, 61, 55, 63, 58, 65 }, PArrow = new[] { 56, 61, 59, 63, 56, 65 } } },
+    { 'J', new PFlip { Name = "P-channel JFET",
+      Swaps = new[,] { { "&amp;ASCJFET_N", "&amp;ASCJFET_P" }, { "&amp;ASCNJFET", "&amp;ASCPJFET" }, { "&amp;ASC.model NJFET NJF", "&amp;ASC.model PJFET PJF" },
+                       { "&amp;ASC@", "&amp;ASCB" }, { "&amp;ASCFully configurable n-channel JFET", "&amp;ASCFully configurable p-channel JFET" } },
+      NArrow = new[] { 48, 70, 51, 72, 48, 74 }, PArrow = new[] { 50, 70, 47, 72, 50, 74 } } } };
+
+  static string ArrowPattern(int[] p) {   // closed triangle: three points, then the first again
+    string pt = "<Item X=\"{0}\" Y=\"{1}\"/>";
+    return string.Format(pt, p[0], p[1]) + "(\\r?\\n)" + string.Format(pt, p[2], p[3]) + "\\r?\\n" + string.Format(pt, p[4], p[5]) + "\\r?\\n" + string.Format(pt, p[0], p[1]);
+  }
+  static string ArrowText(int[] p) {
+    string pt = "<Item X=\"{0}\" Y=\"{1}\"/>";
+    return string.Format(pt, p[0], p[1]) + "$1" + string.Format(pt, p[2], p[3]) + "$1" + string.Format(pt, p[4], p[5]) + "$1" + string.Format(pt, p[0], p[1]);
+  }
+
+  public static string FlipToPType(string xml, string refdes, char kind, List<string> report) {
+    PFlip f = PFLIPS[kind];
     var comp = Regex.Match(xml, "<Item CiID=\"\\d+\" Class=\"CiComponent\">\\s*<CiComponent Class=\"CiComponent\" LocalName=\"&amp;ASC" + Regex.Escape(refdes) + "\" Model=\"\\d+\" SymCompID=\"(\\d+)\"(?:(?!</CiComponent>).)*</CiComponent>", RegexOptions.Singleline);
-    if (!comp.Success) { report.Add("WARNING  " + refdes + ": component not found, symbol left as NPN"); return xml; }
+    if (!comp.Success) { report.Add("WARNING  " + refdes + ": component not found, symbol left as N-type"); return xml; }
     string c = comp.Value;
-    string[,] swaps = {
-      { "<Item Value=\"&amp;ASCBJT_NPN\"/>", "<Item Value=\"&amp;ASCBJT_PNP\"/>" },
-      { "<Item Value=\"&amp;ASCNPN\"/>", "<Item Value=\"&amp;ASCPNP\"/>" },
-      { "<Item Value=\"&amp;ASC.MODEL NPN NPN\"/>", "<Item Value=\"&amp;ASC.model PNP PNP\"/>" },
-      { "<Item Value=\"&amp;ASCFully configurable n-type BJT\"/>", "<Item Value=\"&amp;ASCFully configurable p-type BJT\"/>" } };
-    for (int i = 0; i < swaps.GetLength(0); i++) {
-      if (c.IndexOf(swaps[i, 0]) < 0) { report.Add("WARNING  " + refdes + ": not a standard virtual NPN, symbol left as NPN"); return xml; }
-      c = c.Replace(swaps[i, 0], swaps[i, 1]);
+    for (int i = 0; i < f.Swaps.GetLength(0); i++) {
+      // string items are matched whole (<Item Value="..."/>); the Double swap is an attribute
+      string from = f.Swaps[i, 0].StartsWith("Double=") ? f.Swaps[i, 0] : "<Item Value=\"" + f.Swaps[i, 0] + "\"/>";
+      string to = f.Swaps[i, 1].StartsWith("Double=") ? f.Swaps[i, 1] : "<Item Value=\"" + f.Swaps[i, 1] + "\"/>";
+      int at = c.IndexOf(from);
+      if (at < 0) { report.Add("WARNING  " + refdes + ": not a standard N-type virtual part (" + f.Swaps[i, 0] + " missing), symbol left as N-type"); return xml; }
+      c = c.Substring(0, at) + to + c.Substring(at + from.Length);   // first occurrence only
     }
-    string sym = comp.Groups[1].Value;
-    var symBlk = Regex.Match(xml, "<Item ID=\"" + sym + "\" Class=\"CIITSymbolComp\">(?:(?!</CIITSymbolComp>).)*</CIITSymbolComp>", RegexOptions.Singleline);
-    const string npnArrow = "<Item X=\"60\" Y=\"71\"/>(\\r?\\n)<Item X=\"61\" Y=\"75\"/>\\r?\\n<Item X=\"57\" Y=\"76\"/>\\r?\\n<Item X=\"60\" Y=\"71\"/>";
-    const string pnpArrow = "<Item X=\"58\" Y=\"77\"/>$1<Item X=\"57\" Y=\"73\"/>$1<Item X=\"61\" Y=\"72\"/>$1<Item X=\"58\" Y=\"77\"/>";
-    if (!symBlk.Success || !Regex.IsMatch(symBlk.Value, npnArrow)) { report.Add("WARNING  " + refdes + ": emitter arrow not found, symbol left as NPN"); return xml; }
+    var symBlk = Regex.Match(xml, "<Item ID=\"" + comp.Groups[1].Value + "\" Class=\"CIITSymbolComp\">(?:(?!</CIITSymbolComp>).)*</CIITSymbolComp>", RegexOptions.Singleline);
+    string nArrow = ArrowPattern(f.NArrow);
+    if (!symBlk.Success || !Regex.IsMatch(symBlk.Value, nArrow)) { report.Add("WARNING  " + refdes + ": symbol arrow not found, symbol left as N-type"); return xml; }
     // apply the later block first so the earlier index stays valid
     var edits = new List<Tuple<int, int, string>> {
       Tuple.Create(comp.Index, comp.Length, c),
-      Tuple.Create(symBlk.Index, symBlk.Length, Regex.Replace(symBlk.Value, npnArrow, pnpArrow)) };
+      Tuple.Create(symBlk.Index, symBlk.Length, Regex.Replace(symBlk.Value, nArrow, ArrowText(f.PArrow))) };
     edits.Sort((p, q) => q.Item1.CompareTo(p.Item1));
     foreach (var e in edits) xml = xml.Substring(0, e.Item1) + e.Item3 + xml.Substring(e.Item1 + e.Item2);
-    report.Add("SYMBOL   " + refdes + ": virtual NPN turned into virtual PNP");
+    report.Add("SYMBOL   " + refdes + ": N-type virtual part turned into virtual " + f.Name);
     return xml;
   }
 
@@ -219,6 +252,31 @@ public static class Ms14 {
     return v;
   }
   static string Num(double v) { return v.ToString("G12", System.Globalization.CultureInfo.InvariantCulture); }
+  public static bool TrySpiceNumber(string tok, out double v) {
+    v = 0;
+    if (!Regex.IsMatch(tok, @"^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?(?:meg|mil|[tgkmunpf])?[a-z]*$", RegexOptions.IgnoreCase)) return false;
+    v = SpiceNumber(tok); return true;
+  }
+
+  // Instance parameters live in the component's first CiaParamList string, which the SPICE template appends as %S0.
+  static readonly string ParamListRx = "(<CiaParamList Class=\"CiaParamList\">\\s*<doubles/>\\s*)<strings(?:/>|>(?:(?!</strings>).)*</strings>)";
+  public static string SetInstanceParams(string xml, string refdes, string text, List<string> report) {
+    var comp = Regex.Match(xml, "<CiComponent Class=\"CiComponent\" LocalName=\"&amp;ASC" + Regex.Escape(refdes) + "\" Model=\"\\d+\"(?:(?!</CiComponent>).)*</CiComponent>", RegexOptions.Singleline);
+    if (!comp.Success) { report.Add("ERROR    " + refdes + ": component not found for instance parameters"); return xml; }
+    var pl = new Regex(ParamListRx, RegexOptions.Singleline).Match(comp.Value);
+    if (!pl.Success) { report.Add("ERROR    " + refdes + ": no instance parameter list"); return xml; }
+    string block = comp.Value.Substring(0, pl.Index) + pl.Groups[1].Value + "<strings>\n<Item Value=\"&amp;ASC" + Attr(text) + "\"/>\n</strings>" + comp.Value.Substring(pl.Index + pl.Length);
+    report.Add("INSTANCE " + refdes + ":" + text);
+    return xml.Substring(0, comp.Index) + block + xml.Substring(comp.Index + comp.Length);
+  }
+  public static string ReadInstanceParams(string xml, string refdes) {
+    var comp = Regex.Match(xml, "<CiComponent Class=\"CiComponent\" LocalName=\"&amp;ASC" + Regex.Escape(refdes) + "\" Model=\"\\d+\"(?:(?!</CiComponent>).)*</CiComponent>", RegexOptions.Singleline);
+    if (!comp.Success) return null;
+    var pl = new Regex(ParamListRx, RegexOptions.Singleline).Match(comp.Value);
+    if (!pl.Success) return null;
+    var item = Regex.Match(pl.Value, "<Item Value=\"&amp;ASC([^\"]*)\"/>");
+    return item.Success ? item.Groups[1].Value.Replace("&quot;", "\"").Replace("&lt;", "<").Replace("&amp;", "&") : "";
+  }
 
   // Analysis cards of the netlist: kind ("op", "ac", "tran") -> tokens after the card name.
   public static List<string[]> ParseAnalyses(string text) {
@@ -276,7 +334,8 @@ public static class Ms14 {
     var ssm = Regex.Match(xml, "SimState=\"([^\"]*)\"");
     if (!ssm.Success) { report.Add("ERROR    design has no SimState"); return xml; }
     string ss = ssm.Groups[1].Value, active = null;
-    string[,] bounds = { { "op", "OP", "AC", "dcOpPoint", "DC Operating Point" }, { "ac", "AC", "PHASOR", "ac", "AC Sweep" }, { "tran", "TRAN", "FOUR", "transient", "Transient" } };
+    string[,] bounds = { { "op", "OP", "AC", "dcOpPoint", "DC Operating Point" }, { "ac", "AC", "PHASOR", "ac", "AC Sweep" }, { "tran", "TRAN", "FOUR", "transient", "Transient" },
+                         { "dc", "DC_SWEEP", "SENS", "dcSweep", "DC Sweep" } };
     foreach (var card in cards) {
       int b = -1;
       for (int k = 0; k < bounds.GetLength(0); k++) if (bounds[k, 0] == card[0]) b = k;
@@ -300,6 +359,24 @@ public static class Ms14 {
         sec = SetValue(sec, "TSTOP", "double", tstop, 0); sec = SetValue(sec, "TSTART", "double", tstart, 0);
         sec = SetValue(sec, "TMAX", "double", tmax, 0);
         desc = "Transient " + tstart + " s to " + tstop + " s, max step " + tmax + " s";
+      } else if (card[0] == "dc") {
+        // .dc <src> <start> <stop> <step> [<src2> <start2> <stop2> <step2>]; Multisim names sources "v" + refdes, lower case
+        if (card.Length < 5 || "VI".IndexOf(char.ToUpperInvariant(card[1][0])) < 0) { report.Add("ERROR    .dc needs: <V or I source> <start> <stop> <step> [second sweep]"); continue; }
+        sec = SetValue(sec, "Source1", "string", card[1].Substring(0, 1).ToLowerInvariant() + card[1].ToLowerInvariant(), 0);
+        sec = SetValue(sec, "NodeFilterSource1", "long", "7", 0);
+        sec = SetValue(sec, "Start1", "double", Num(SpiceNumber(card[2])), 0);
+        sec = SetValue(sec, "Stop1", "double", Num(SpiceNumber(card[3])), 0);
+        sec = SetValue(sec, "Increment1", "double", Num(SpiceNumber(card[4])), 0);
+        desc = "DC sweep " + card[1] + " " + Num(SpiceNumber(card[2])) + " to " + Num(SpiceNumber(card[3])) + " step " + Num(SpiceNumber(card[4]));
+        if (card.Length >= 9) {
+          sec = SetValue(sec, "UseSource2", "long", "1", 0);
+          sec = SetValue(sec, "Source2", "string", card[5].Substring(0, 1).ToLowerInvariant() + card[5].ToLowerInvariant(), 0);
+          sec = SetValue(sec, "NodeFilterSource2", "long", "7", 0);
+          sec = SetValue(sec, "Start2", "double", Num(SpiceNumber(card[6])), 0);
+          sec = SetValue(sec, "Stop2", "double", Num(SpiceNumber(card[7])), 0);
+          sec = SetValue(sec, "Increment2", "double", Num(SpiceNumber(card[8])), 0);
+          desc += ", then " + card[5] + " " + Num(SpiceNumber(card[6])) + " to " + Num(SpiceNumber(card[7])) + " step " + Num(SpiceNumber(card[8]));
+        }
       } else desc = "DC operating point";
       sec = SetValue(sec, "ANALYSIS_ID", "long", "1", 0); sec = SetValue(sec, "PLOT_TITLE", "string", bounds[b, 4], 0);
       sec = SetOutputs(sec, outputs);
@@ -371,8 +448,9 @@ public static class Ms14 {
       string localName = mm.Groups[2].Value, body = models[kv.Value];
       string oldType = Regex.Match(mm.Groups[5].Value, "^\\.model\\s+\\S+\\s+([A-Za-z]+)", RegexOptions.IgnoreCase).Groups[1].Value.ToUpperInvariant();
       string newType = Regex.Match(body, "^([A-Za-z]+)").Groups[1].Value.ToUpperInvariant();
-      if (oldType != newType) report.Add((oldType == "NPN" && newType == "PNP" ? "NOTE     " : "WARNING  ") + localName + ": imported as " + oldType + ", netlist model " + kv.Value + " is " + newType +
-                                         (oldType == "NPN" && newType == "PNP" ? " (BJT symbol is switched to PNP below)" : " (symbol keeps the imported type; replace it in Multisim)"));
+      bool flipped = (oldType == "NPN" && newType == "PNP") || (oldType == "NMOS" && newType == "PMOS") || (oldType == "NJF" && newType == "PJF");
+      if (oldType != newType) report.Add((flipped ? "NOTE     " : "WARNING  ") + localName + ": imported as " + oldType + ", netlist model " + kv.Value + " is " + newType +
+                                         (flipped ? " (symbol is switched to the P-type part below)" : " (symbol keeps the imported type; replace it in Multisim)"));
       string repl = mm.Groups[1].Value + localName + mm.Groups[3].Value + "1" + mm.Groups[4].Value + "&amp;ASC" + Attr(".MODEL " + localName + " " + body) + "\"";
       xml = xml.Substring(0, mm.Index) + repl + xml.Substring(mm.Index + mm.Length);
       var users = new List<string>();
@@ -393,7 +471,8 @@ $elementModel = New-Object 'System.Collections.Generic.Dictionary[string,string]
 $models = New-Object 'System.Collections.Generic.Dictionary[string,string]'
 $elementNodes = New-Object 'System.Collections.Generic.Dictionary[string,string[]]'
 $netText = [IO.File]::ReadAllText($netPath)
-[Ms14]::ParseNetlist($netText, $elementModel, $models, $elementNodes)
+$elementInst = New-Object 'System.Collections.Generic.Dictionary[string,string]'
+[Ms14]::ParseNetlist($netText, $elementModel, $models, $elementNodes, $elementInst)
 
 $xml = [Ms14]::ReadDesign([IO.File]::ReadAllBytes($inPath))
 $report = New-Object 'System.Collections.Generic.List[string]'
@@ -405,9 +484,17 @@ if ($elementModel.Count -gt 0) {
   foreach ($k in $map.Keys) { $byRef[$map[$k].ToUpperInvariant()] = $elementModel[$k] }
   $patched = [Ms14]::Patch($xml, $byRef, $models, $report)
 
-  # PNP devices were imported as NPN symbols; flip them so the schematic matches the netlist
+  # P-type devices (PNP, PMOS, P-channel JFET) were imported as N-type symbols; flip them so the schematic matches the netlist
   foreach ($k in $map.Keys) {
-    if ($k[0] -eq 'Q' -and $models[$elementModel[$k]] -match '^PNP\b') { $patched = [Ms14]::FlipBjtToPnp($patched, $map[$k], $report) }
+    $kind = [char]::ToUpperInvariant($k[0]); $mtype = $models[$elementModel[$k]]
+    if (($kind -eq 'Q' -and $mtype -match '^PNP\b') -or ($kind -eq 'M' -and $mtype -match '^PMOS\b') -or ($kind -eq 'J' -and $mtype -match '^PJF\b')) {
+      $patched = [Ms14]::FlipToPType($patched, $map[$k], $kind, $report)
+    }
+  }
+
+  # instance parameters (W/L, AREA, ...) are dropped by the import as well
+  foreach ($k in $map.Keys) {
+    if ($elementInst.ContainsKey($k)) { $patched = [Ms14]::SetInstanceParams($patched, $map[$k], $elementInst[$k], $report) }
   }
 } else { $report.Add("MODELS   no D/Q/M/J devices with a .model; nothing to write back") }
 
@@ -429,6 +516,10 @@ $back = [Ms14]::ReadBack($patched)
 foreach ($k in $map.Keys) {
   $ref = $map[$k].ToUpperInvariant(); $expect = $models[$elementModel[$k]]
   if (-not $back.ContainsKey($ref) -or $back[$ref] -ne $expect) { $report.Add("ERROR    verify " + $k + " -> " + $ref + ": stored model is [" + $back[$ref] + "]") }
+  if ($elementInst.ContainsKey($k)) {
+    $inst = [Ms14]::ReadInstanceParams($patched, $map[$k])
+    if ($inst -ne $elementInst[$k]) { $report.Add("ERROR    verify " + $k + " -> " + $ref + ": stored instance parameters are [" + $inst + "]") }
+  }
 }
 $report
 if ($report | Where-Object { $_ -match '^(MISSING|ERROR|UNMATCHED)' }) { "PATCH: FAILED, nothing written"; exit 1 }

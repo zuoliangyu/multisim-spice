@@ -18,8 +18,10 @@ description: 把自然语言电路描述变成经过验证、可在 Multisim 打
 - **辅助脚本**(`scripts\`,Windows PowerShell 5.1 即可运行):
   - `check.ps1 <网表> ["<命令>; <命令>"]` —— 跑 ngspice 批处理并扫报错,末行输出 `CHECK: PASS` / `CHECK: FAIL`(退出码 0 / 1)。第二个参数是可选的 ngspice 测量命令,脚本会在临时副本里注入 `.control` 块再跑,**交付网表本身不被改动**。
   - `find-multisim.ps1 [-Open <网表>]` —— 探测 `multisim.exe` 并打印路径;带 `-Open` 时顺便用它打开网表。
-  - `patch-ms14.ps1 <网表> <导入后另存的.ms14> [<输出.ms14>] [-Outputs "out,in"]` —— 把网表里的 `.model` 和 `.op` / `.ac` / `.tran` 分析写回 Multisim 工程,并把被导成 NPN 的 PNP 改回来;打开后直接 F5 就出结果,见第 5 步。
-- **参考网表**(`references\`)—— 7 个已自检通过的电路(分压、RC 低通、RC 阶跃、整流、BJT 共射、运放反相,以及演示模型写回的多器件电路),索引、自检命令、Multisim 导入实测和完整交付示例见 `references\README.md`;`references\fixtures\` 是 `patch-ms14.ps1` 的回归测试样本。
+  - `patch-ms14.ps1 <网表> <导入后另存的.ms14> [<输出.ms14>] [-Outputs "out,in"]` —— 把网表里的 `.model`、实例参数和 `.op` / `.ac` / `.tran` / `.dc` 分析写回 Multisim 工程,并把被导成 N 型的 PNP / PMOS / P 沟道 JFET 改回来;打开后直接 F5 就出结果,见第 5 步。
+- **参考网表**(`references\`)—— 9 个已自检通过的电路(分压、RC 低通、RC 阶跃、整流、BJT 共射、运放反相、多种半导体模型、MOS / JFET、直流扫描),索引、自检命令、Multisim 导入实测和完整交付示例见 `references\README.md`。写新电路时类型相近就先读对应 `.cir`。
+  - `references\fixtures\` —— 各网表导入 Multisim 后直接另存的原始工程,是 `patch-ms14.ps1` 的回归测试样本(命令见 `references\README.md`);`fixtures\format\` 是推导脚本里字段和坐标用的格式样本。
+- **示例工程**(`examples\`)—— 用上述网表走完整流程生成的成品 `.ms14`,打开直接 F5 即可。用户想先看看效果,或者怀疑本机 Multisim 有问题时,用 `find-multisim.ps1 -Open` 打开其中一个,对照 `examples\README.md` 里的结果。
 - **Multisim** —— 用户机本地安装的 NI Multisim(14.x 已验证):
   - **不要写死路径。** 用 `find-multisim.ps1` 探测,找不到再问用户。
 
@@ -98,7 +100,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "<SKILL_DIR>\scripts\find-mu
 
 ### 第 5 步 · 生成可直接运行的 Multisim 工程(必做)
 
-Multisim 导入网表时会丢掉三样东西:`.op` / `.ac` / `.tran` 分析设置;`D` / `Q` / `M` / `J` 器件的 `.model` 参数(全部变成默认参数的虚拟器件);以及器件类型(PNP 被导成 NPN,见《SPICE 网表规范》)。`patch-ms14.ps1` 把这些写回 Multisim 工程:
+Multisim 导入网表时会丢掉四样东西:`.op` / `.ac` / `.tran` / `.dc` 分析设置;`D` / `Q` / `M` / `J` 器件的 `.model` 参数(全部变成默认参数的虚拟器件);器件行上的实例参数(MOS 的 `W` / `L` 等);以及器件类型(PNP、PMOS、P 沟道 JFET 都被导成 N 型,见《SPICE 网表规范》)。`patch-ms14.ps1` 把这些写回 Multisim 工程:
 
 1. 请用户在 Multisim 里 **File → Save As**,存成 `<电路名>_import.ms14`,放在 `.cir` 同一目录,存好后告诉你。用户存成别的名字也没关系,在目录里找刚保存的 `.ms14` 即可。
 2. 运行:
@@ -106,8 +108,8 @@ Multisim 导入网表时会丢掉三样东西:`.op` / `.ac` / `.tran` 分析设�
    powershell -NoProfile -ExecutionPolicy Bypass -File "<SKILL_DIR>\scripts\patch-ms14.ps1" "<circuit.cir 的完整路径>" "<电路名>_import.ms14 的完整路径" "<电路名>.ms14 的完整路径"
    ```
    脚本做的事:
-   - **模型**:按 **引脚所接的网络** 把网表器件对应到 Multisim 元件(导入会打乱内部编号,不能按名字对),把每个元件的模型换成网表里的 `.model`(几个元件共用一个虚拟模型时会拆开),把 PNP 的符号和类型改回 PNP,最后逐个读回核对。
-   - **分析**:按网表的 `.op` / `.ac` / `.tran` 填好参数(SPICE 后缀换算成数值,`.tran` 的最大步长取 `tstep`),勾选输出电压,并设为当前分析(有 `.ac` / `.tran` 时用它们,否则用 `.op`)。输出默认选 `out` 和 `in` 两个网络,都没有时选全部网络;要指定时加 `-Outputs "out,b,c"`。`.dc` 不自动设置(脚本报 `WARNING`),要请用户在 Simulate → Analyses and simulation 里手动设。
+   - **模型**:按 **引脚所接的网络** 把网表器件对应到 Multisim 元件(导入会打乱内部编号,不能按名字对),把每个元件的模型换成网表里的 `.model`(几个元件共用一个虚拟模型时会拆开);把 PNP / PMOS / P 沟道 JFET 的符号和类型改回 P 型;把器件行上 `.model` 之后的实例参数(`W=20u L=2u`、`AREA` 等)写回;最后逐个读回核对。
+   - **分析**:按网表的 `.op` / `.ac` / `.tran` / `.dc` 填好参数(SPICE 后缀换算成数值,`.tran` 的最大步长取 `tstep`,`.dc` 支持第二个扫描源),勾选输出电压,并设为当前分析(有 `.ac` / `.tran` / `.dc` 时用它们,否则用 `.op`;其余分析的参数也会填好,用户可在 Simulate → Analyses and simulation 里切换)。输出默认选 `out` 和 `in` 两个网络,都没有时选全部网络;要指定时加 `-Outputs "out,b,c"`。
    
    末行 `PATCH: OK` 才算成功;出现 `UNMATCHED` / `ERROR` 时脚本 **不写输出文件**,退出码 1。
 3. 请用户 **先关掉 Multisim 里的 `<电路名>_import` 标签页**(提示保存时选不保存),再 File → Open 打开 `<电路名>.ms14`,**直接按 F5** 就会出结果(工作点表、波特图或波形)。同名文件已开着时,Multisim 只会切到旧标签页、不重新读文件,所以重新生成同名文件后一定要先关旧标签页。
@@ -116,10 +118,12 @@ Multisim 导入网表时会丢掉三样东西:`.op` / `.ac` / `.tran` 分析设�
 
 实测(均为打开后不做任何设置、直接 F5):
 - 多器件对照电路(`references\07_multi_device.cir`:两种 NPN、一个 PNP、两种二极管,其中两个共用模型):Multisim 的 DC 工作点与 ngspice 一致到 5 位有效数字,PNP 符号正确;
+- MOS / JFET(`references\08_mos_jfet.cir`:带 `W=20u L=2u` 的 NMOS / PMOS、N / P 沟道 JFET):4 个漏极电压与 ngspice 一致到 5 位有效数字;
 - BJT 共射放大(`05`):AC 扫描直接出波特图,中频增益约 158(44 dB),相位约 −180°;
-- RC 阶跃(`03`):瞬态直接出波形,V(out) 按 τ = 1 ms 指数上升到 5 V。
+- RC 阶跃(`03`):瞬态直接出波形,V(out) 按 τ = 1 ms 指数上升到 5 V;
+- 分压直流扫描(`.dc V1 0 12 0.5`):直接出 V(out) 随 V1 线性变化的曲线,12 V 时 3.837 V。
 
-限制:MOS 管和 JFET 的 P 型器件只会写回模型参数,**符号仍是 N 型**(脚本会报 `WARNING`),这时提醒用户右键该器件 → Replace 换成 P 型虚拟器件,换完再跑一次脚本写回参数。
+`UNMATCHED` 且提示 Multisim 换成了数据库器件时,是 `.model` 名和 Multisim 数据库模型重名(见《SPICE 网表规范》的命名规则),导入时就已经接错,脚本修不了:按提示改模型名,重新走第 4、5 步。
 
 脚本失败时的手动办法(都已实测):
   - **Edit model(和 ngspice 完全一致)**:双击器件 → Value 页 → Edit model,在参数表里逐行 **先取消该行的 Use default 勾选,再改 Value**,值用科学计数法(`1.434e-14`)。只改影响直流工作点的关键几个(BJT 一般是 IS、BF、VAF、IKF、ISE、NE;二极管是 IS、N、RS)时,BJT 的 VC 也能与 ngspice 一致到第 5 位有效数字。
@@ -137,6 +141,7 @@ Multisim 导入网表时会丢掉三样东西:`.op` / `.ac` / `.tran` 分析设�
 - **交付给 Multisim 的网表不要用 `.subckt` / `X` 子电路**:Multisim 14 导入时会把子电路实例整个丢掉,不报错(实测)。运放等用 `E` 受控源加电阻直接展开,写法见 `references\06_opamp_inverting.cir`。
 - **半导体器件必须配 `.model`**(二极管、三极管、MOS 等),否则 `unknown model`。
   注意:Multisim 14 导入时会把这些器件换成 **虚拟器件,`.model` 参数全部丢失、改用 SPICE 默认值**(实测,导出网表里只剩 `.model ... NPN`)。而且器件类型只写在被忽略的 `.model` 里,所以 **PNP 会被导入成 NPN**(MOS / JFET 的 P 型同理会变成 N 型)。这是导入器的固定行为:它只读连接关系和元件值,`.model` 卡整个忽略。型号写成元件库名、改用科学计数法、去掉单位后缀,甚至把 Multisim 自己导出的网表原样导回去,参数都会丢(均已实测),所以 **不要为了迁就 Multisim 改模型名**,照常写带完整参数的 `.model`,保证 ngspice 自检准确。导入后用 `patch-ms14.ps1` 把模型写回去,见第 4 步。
+- **`.model` 名要有区分度**:用带下划线的描述性名字,如 `PMOS_LOAD`、`NJF_AMP`、`Q2N2222`;不要用 `MP`、`MN` 这类两三个字母的短名。Multisim 导入时会把模型名与其数据库模型同名的器件直接换成数据库里的器件,类型可能都不对,而且不连线(实测 `MP` 被换成三极管 MPS2222,`PMOS_A`、`MP_SKILL`、`XP1` 正常),事后无法修补。
 - **数值后缀(SPICE 大小写不敏感,这是头号大坑)**:
   `T`=1e12 · `G`=1e9 · `meg`=1e6 · `k`=1e3 · `m`=1e-3 · `u`=1e-6 · `n`=1e-9 · `p`=1e-12 · `f`=1e-15。
   **`M` 不是兆!`M`=`m`=1e-3。1 兆欧要写 `1meg`,写 `1M` 是 1 毫欧。**
@@ -177,6 +182,7 @@ powershell -NoProfile -Command "Start-Process -FilePath '<multisim.exe 路径>' 
 | Multisim 路径不存在 | 见《定位 Multisim》 |
 | Multisim 启动弹 "Master Database cannot be accessed",导入日志里所有元件都 `Failed to create` | 与网表无关,是 Multisim 的授权检查失败。先查 NI Authentication Service(`niauth`)有没有被禁用(常见于系统优化工具批量禁用 NI 服务),管理员 PowerShell 执行 `Set-Service niauth -StartupType Automatic; Start-Service niauth`。服务正常但普通权限下仍时好时坏时(实测出现过,原因未查明),让用户右键 Multisim 快捷方式 → 属性 → 兼容性 → 勾选"以管理员身份运行此程序";以管理员身份运行一直正常 |
 | 导入后少了元件(如运放不见了) | 网表里用了 `.subckt` / `X`,改成基本元件展开 |
+| `patch-ms14.ps1` 报 `UNMATCHED`,提示 Multisim 换成了数据库器件 | `.model` 名和 Multisim 数据库模型重名(如 `MP` → MPS2222),改成有区分度的名字后重新导入 |
 | 导入后有图但不确定连线对不对 | 交叉的线看不出是否相连。让用户在 Multisim 里 Transfer → Export Netlist 导出网表,逐个引脚和原网表对比;导出的网表也能直接用 `check.ps1` 跑(分析命令通过第二个参数给,如 `"tran 50u 100m; meas ..."`) |
 | Multisim 结果和 ngspice 有偏差,但连线没错 | 半导体器件被换成了默认参数的虚拟器件,没做第 5 步;按第 5 步用 `patch-ms14.ps1` 写回模型 |
 | 打开修补后的 `.ms14`,看到的还是修补前的样子 | 同名文件的旧标签页还开着,Multisim 没重新读文件;关掉旧标签页(不保存)再打开 |

@@ -13,6 +13,8 @@
 | `05_bjt_ce_amp.cir` | `.ac` | BJT `.model`、分压偏置、耦合/旁路电容 | IC ≈ 1.4 mA,VC ≈ 5.5 V,增益 40~45 dB | IC 1.37 mA,VC 5.55 V,44.0 dB,相位 −175° |
 | `06_opamp_inverting.cir` | `.tran` | 理想运放用 `E` 受控源 + 电阻展开(不用 `.subckt`) | 增益 −10 | −9.999 |
 | `07_multi_device.cir` | `.op` | 多种半导体模型(两种 NPN、PNP、两种二极管,D1/D3 共用模型),演示导入后写回模型 | 见下文《导入后写回模型》 | VC1 8.116 V,VC2 0.224 V,VC3 5.255 V |
+| `08_mos_jfet.cir` | `.op` | NMOS / PMOS(带 `W=20u L=2u`)、N / P 沟道 JFET,有区分度的模型名 | 见下文《导入后写回模型》 | d1 3.960 V,d2 0.522 V,d3 3.454 V,d4 2.013 V |
+| `09_dc_sweep.cir` | `.dc` | 直流扫描输入电压 | V(out) = V1 × 4.7 / 14.7 | 12 V 时 3.837 V |
 
 ## 自检命令
 
@@ -31,6 +33,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check.ps1 references
 | `05_bjt_ce_amp.cir` | `meas ac gain_1k find vdb(out) at=1k; meas ac phase_1k find vp(out) at=1k; op; print v(b) v(e) v(c) @q1[ic]` |
 | `06_opamp_inverting.cir` | `meas tran vin_pk find v(in) at=2.25m; meas tran vout_pk find v(out) at=2.25m; let gain = vout_pk / vin_pk; print gain` |
 | `07_multi_device.cir` | `op; print v(c1) v(c2) v(c3) v(d1) v(d2) v(d3)` |
+| `08_mos_jfet.cir` | `op; print v(d1) v(d2) v(d3) v(d4)` |
+| `09_dc_sweep.cir` | `print v(out)[24]`(第 25 个扫描点,即 V1 = 12 V) |
 
 ## Multisim 14 导入实测
 
@@ -83,13 +87,21 @@ Multisim 工程文件 `.ms14` 是分块压缩的 XML(PKWARE DCL 压缩,每块最
 | `05_bjt_ce_amp`(AC 扫描) | 波特图:中频增益约 158,相位约 −180° | 44.0 dB(≈158),−175°(1 kHz) |
 | `03_rc_step`(瞬态) | V(out) 按 τ = 1 ms 指数上升到 5 V | τ = 1.0002 ms |
 
-**回归测试**(改脚本后在仓库根目录跑,不需要打开 Multisim):
+**回归测试**(改脚本后在仓库根目录跑,不需要打开 Multisim)。`fixtures/` 里是各网表在 Multisim 14.0 里导入后直接另存、未做任何修改的原始工程:
 
 ```
-powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\patch-ms14.ps1" "references\07_multi_device.cir" "references\fixtures\07_multi_device_import.ms14" "<临时目录>\07_out.ms14"
+powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\patch-ms14.ps1" "references\<网表>.cir" "references\fixtures\<网表>_import.ms14" "<临时目录>\out.ms14"
 ```
 
-应输出 6 行 `MAPPED`(网表 Q1/Q2/Q3/D1/D2/D3 → 内部 Q4/Q2/Q1/D4/D2/D1)、3 行 `CLONED`、1 行 `SYMBOL Q1: virtual NPN turned into virtual PNP`、1 行 `ANALYSIS DC operating point; outputs V(a), ...`、`ACTIVE   dcOpPoint`,末行 `PATCH: OK`。`fixtures/07_multi_device_import.ms14` 是 `07_multi_device.cir` 在 Multisim 14.0 里导入后直接另存、未做任何修改的工程。
+| 网表 | 覆盖的功能 | 输出里应有 |
+|---|---|---|
+| `03_rc_step` | 瞬态分析,无半导体器件 | `ANALYSIS Transient 0 s to 0.006 s`、`ACTIVE   transient` |
+| `05_bjt_ce_amp` | BJT 模型写回 + AC 分析 | `PATCHED  Q1 <- Q2N2222 ...`、`ACTIVE   ac` |
+| `07_multi_device` | 按引脚对应(网表 Q1/Q2/Q3/D1/D2/D3 → 内部 Q4/Q2/Q1/D4/D2/D1)、拆分共用模型、PNP 翻转 | 6 行 `MAPPED`、3 行 `CLONED`、`SYMBOL Q1: N-type virtual part turned into virtual PNP BJT`、`ACTIVE   dcOpPoint` |
+| `08_mos_jfet` | PMOS / P 沟道 JFET 翻转、MOS 的 W/L 实例参数 | 4 行 `MAPPED`、2 行 `SYMBOL`、2 行 `INSTANCE ...: W=2e-05  L=2e-06` |
+| `09_dc_sweep` | 直流扫描 | `ANALYSIS DC sweep V1 0 to 12 step 0.5`、`ACTIVE   dcSweep` |
+
+末行都应是 `PATCH: OK`。对已经写回过的工程再跑一次也应 `PATCH: OK`(不会重复拆分或翻转)。`fixtures/format/` 是推导脚本里各字段和坐标用的格式样本,见其中的 README。`examples/` 是用这些网表和原始工程生成的、可直接按 F5 的成品工程。
 
 ### 完整交付示例(含半导体器件)
 

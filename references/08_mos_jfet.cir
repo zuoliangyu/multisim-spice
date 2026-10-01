@@ -1,0 +1,23 @@
+MOSFET and JFET devices - DC operating point
+* Demonstrates the Multisim write-back for MOS and JFET devices: NMOS and PMOS with W/L instance
+* parameters, N- and P-channel JFETs. Model names are distinctive on purpose: a short name such
+* as MP matches a Multisim database model and gets replaced by an unconnected database part.
+VDD vdd 0 DC 5
+VG1 g1 0 DC 2
+RD1 vdd d1 10k
+M1 d1 g1 0 0 NMOS_SW W=20u L=2u
+VG2 g2 0 DC 3
+RD2 d2 0 10k
+M2 d2 g2 vdd vdd PMOS_LOAD W=20u L=2u
+RD3 vdd d3 1k
+RS3 s3 0 500
+J1 d3 0 s3 NJF_AMP
+RD4 d4 0 1k
+RS4 vdd s4 500
+J2 d4 vdd s4 PJF_AMP
+.model NMOS_SW NMOS(LEVEL=1 VTO=1 KP=20u LAMBDA=0.01)
+.model PMOS_LOAD PMOS(LEVEL=1 VTO=-1 KP=10u LAMBDA=0.01)
+.model NJF_AMP NJF(VTO=-2 BETA=1m LAMBDA=0.01)
+.model PJF_AMP PJF(VTO=-2 BETA=2m LAMBDA=0.01)
+.op
+.end
