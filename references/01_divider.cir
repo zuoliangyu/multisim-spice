@@ -1,0 +1,7 @@
+Voltage divider - DC operating point
+* 12 V across 10k + 4.7k; expect V(out) = 12 * 4.7 / 14.7 = 3.837 V
+V1 in 0 DC 12
+R1 in out 10k
+R2 out 0 4.7k
+.op
+.end

@@ -24,4 +24,13 @@ For source code, documentation and project information, see:
 
     https://ngspice.sourceforge.io/
 
-ngspice is not modified; the binary tree is included as-is.
+ngspice is not modified. To keep the bundle small, only the parts used by
+this skill's batch-mode self-check are included. The following were removed
+from the original archive (files that remain are byte-identical):
+
+    bin/ngspice.exe                (GUI build; ngspice_con.exe is kept)
+    examples/                      (sample circuits)
+    lib/ngspice/*.osdi             (OSDI models; not loaded, spinit unsets osdi_enabled)
+    lib/ngspice/ivlng.dll, ivlng.vpi  (Icarus Verilog co-simulation)
+
+Download the full archive from the URL above if you need any of them.

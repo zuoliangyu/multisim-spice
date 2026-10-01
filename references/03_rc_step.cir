@@ -1,0 +1,7 @@
+RC step response - transient
+* tau = R*C = 1k * 1u = 1 ms; V(out) reaches 63.2% of 5 V (3.16 V) at t = tau
+V1 in 0 PULSE(0 5 0 1u 1u 10m 20m)
+R1 in out 1k
+C1 out 0 1u
+.tran 10u 6m
+.end

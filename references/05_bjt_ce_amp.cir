@@ -1,0 +1,17 @@
+BJT common-emitter amplifier - AC sweep
+* Divider bias 47k/10k from 12 V, RC = 4.7k, RE = 1k bypassed by CE
+* expect VB ~ 2.1 V, VE ~ 1.4 V, IC ~ 1.4 mA, VC ~ 5.5 V; midband gain ~ -gm*(RC||RL) ~ 40-45 dB
+VCC vcc 0 DC 12
+VS sig 0 DC 0 AC 1
+CIN sig b 10u
+R1 vcc b 47k
+R2 b 0 10k
+Q1 c b e Q2N2222
+RC vcc c 4.7k
+RE e 0 1k
+CE e 0 100u
+COUT c out 10u
+RL out 0 10k
+.model Q2N2222 NPN(IS=14.34f XTI=3 EG=1.11 VAF=74.03 BF=255.9 NE=1.307 ISE=14.34f IKF=0.2847 XTB=1.5 BR=6.092 NC=2 ISC=0 IKR=0 RC=1 CJC=7.306p MJC=0.3416 VJC=0.75 FC=0.5 CJE=22.01p MJE=0.377 VJE=0.75 TR=46.91n TF=411.1p ITF=0.6 VTF=1.7 XTF=3 RB=10)
+.ac dec 20 10 10meg
+.end

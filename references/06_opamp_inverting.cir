@@ -1,0 +1,13 @@
+Inverting op-amp amplifier (gain -10) - transient
+* Ideal op-amp built from basic elements (Multisim's netlist import drops .subckt / X instances):
+* RIN 1meg between the inputs, VCVS open-loop gain 1e5 (+ input tied to ground), ROUT 75
+* Rf/Rin = 100k/10k -> 0.1 V peak in gives 1 V peak out, inverted
+VIN in 0 SIN(0 0.1 1k)
+R1 in inv 10k
+RF inv out 100k
+RIN inv 0 1meg
+EOP opo 0 0 inv 1e5
+ROUT opo out 75
+RL out 0 10k
+.tran 5u 3m
+.end

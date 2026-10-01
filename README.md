@@ -13,15 +13,16 @@
 ## 特性
 
 - **不依赖外部 AI API。** 由 Claude 本身(运行这个 skill)生成网表,除了 Claude Code 之外不需要 Gemini / OpenAI / Anthropic API key。
-- **不依赖 Python。** 只有 `SKILL.md` 加一份内置的 Windows 二进制,无 `pip install`。
-- **内置 ngspice 46(Windows x64)** 用于离线自检,绿色版零安装。
+- **不依赖 Python。** 只有 `SKILL.md`、两个 PowerShell 辅助脚本(`scripts/`)和一份内置的 Windows 二进制,无 `pip install`。
+- **内置 ngspice 46(Windows x64)** 用于离线自检,绿色版零安装;只保留自检用到的部分(约 13 MB,删减清单见 [`NOTICE`](NOTICE))。
 - **自验证。** Claude 会扫 ngspice 输出里的报错,并把数值结果对照设计指标核对,不达标就改网表重跑。
-- **Multisim 路径自动探测。** 扫常见安装路径和 Windows 注册表,都没命中才问你。
+- **参考网表库。** `references/` 里有 6 个自检通过的常见电路(分压、RC 低通、RC 阶跃、整流、BJT 共射、运放反相),Claude 写同类电路时先参照它们,索引见 [`references/README.md`](references/README.md)。
+- **Multisim 路径自动探测。** 读 Windows 注册表里的安装路径,再扫各盘 `Program Files`,都没命中才问你。
 
 ## 环境要求
 
 - **Windows** —— 内置的 ngspice 是 Windows x64 二进制;Multisim 本身就是 Windows-only;skill 用 PowerShell 调 OS。
-- **NI Multisim 14.x**(其它版本应该也能用 —— 把路径补进 `SKILL.md` 的候选列表即可)。
+- **NI Multisim 14.x**(其它版本应该也能用 —— 按 `Circuit Design Suite *` 通配探测,不限版本号)。
 - **Claude Code** —— 这是一个 Claude Code skill,通过其 Skill 机制调用。
 
 ## 安装
@@ -84,11 +85,11 @@ Claude 会根据描述自动路由到本 skill,然后:
 
 ## 改 Multisim 搜索路径
 
-打开 `SKILL.md`,跳到 **`## 定位 Multisim`** 那段,把你自己的安装路径加到 `$candidates` 数组里。skill 也会扫 Windows 注册表的 `HKLM:\SOFTWARE\WOW6432Node\National Instruments\Circuit Design Suite`,都没命中才问用户。
+探测逻辑在 `scripts/find-multisim.ps1`:先读注册表 `HKLM:\SOFTWARE\[WOW6432Node\]National Instruments\Circuit Design Suite\<版本>\MSI Parts\Core` 的 `Path`,再扫所有本地盘的 `Program Files (x86)` / `Program Files\National Instruments\Circuit Design Suite *\multisim.exe`,都没命中才问用户。装在非标准目录的话,把路径加进这个脚本即可。
 
 ## 不想要内置的 ngspice 怎么办
 
-删掉 `vendor/Spice64/`,改 `SKILL.md` 让它指向外部的 `ngspice.exe`,例如:
+删掉 `vendor/Spice64/`,改 `scripts/check.ps1` 里的 `$ng` 让它指向外部的 `ngspice_con.exe`,例如:
 
 - `conda install -c conda-forge ngspice`(在 `<env>/Library/bin/` 下放一份 Windows 构建)
 - 从 [ngspice 在 SourceForge 的页面](https://sourceforge.net/projects/ngspice/files/ng-spice-rework/) 下载别的版本

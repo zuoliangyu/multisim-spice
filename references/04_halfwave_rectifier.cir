@@ -1,0 +1,9 @@
+Half-wave rectifier with filter capacitor - transient
+* 10 V peak, 50 Hz; expect peak ~ 10 - 0.7 V; ripple below Vp / (f*RL*C) ~ 1.9 V (upper bound)
+V1 in 0 SIN(0 10 50)
+D1 in out D1N4148
+C1 out 0 100u
+RL out 0 1k
+.model D1N4148 D(IS=2.52n RS=0.568 N=1.752 CJO=4p M=0.4 TT=20n BV=100 IBV=100u)
+.tran 50u 100m
+.end
